@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Compass</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ── Reset & tokens ────────────────────────────────────────────────────── */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-sidebar:   #171717;
+      --bg-main:      #212121;
+      --bg-input:     #2f2f2f;
+      --bg-card:      #2a2a2a;
+      --accent:       #10a37f;
+      --text-primary: #ececec;
+      --text-muted:   #8e8ea0;
+      --sidebar-w:    240px;
+      --sidebar-ease: 0.25s ease;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg-main);
+      color: var(--text-primary);
+      height: 100vh;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ───────────────────────────────────────────────────────────── */
+    #sidebar {
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      background: var(--bg-sidebar);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      transition: width var(--sidebar-ease), min-width var(--sidebar-ease);
+      flex-shrink: 0;
+    }
+
+    #sidebar.collapsed {
+      width: 0;
+      min-width: 0;
+    }
+
+    .sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 14px;
+      gap: 10px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .sidebar-logo img {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      filter: brightness(0) invert(1);
+    }
+
+    .sidebar-logo span {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    #sidebarToggle {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 5px 7px;
+      border-radius: 6px;
+      font-size: 1rem;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    #sidebarToggle:hover { background: #2a2a2a; color: var(--text-primary); }
+
+    .sidebar-divider {
+      height: 1px;
+      background: #2a2a2a;
+      margin: 0 14px;
+      flex-shrink: 0;
+    }
+
+    #newAnalysisBtn {
+      margin: 12px 10px;
+      padding: 10px 14px;
+      background: none;
+      border: 1px solid #3a3a3a;
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 0.875rem;
+      font-family: inherit;
+      cursor: pointer;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    #newAnalysisBtn:hover { background: #2a2a2a; }
+
+    .sidebar-section-label {
+      padding: 10px 14px 4px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    #recentList {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 6px 16px;
+    }
+
+    .recent-item {
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: default;
+    }
+
+    .recent-item:hover { background: #252525; color: var(--text-primary); }
+
+    /* ── Main area ─────────────────────────────────────────────────────────── */
+    #main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    /* ── Top navbar ────────────────────────────────────────────────────────── */
+    #topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: relative;
+      padding: 10px 20px;
+      gap: 12px;
+      border-bottom: 1px solid #2a2a2a;
+      flex-shrink: 0;
+      min-height: 52px;
+    }
+
+    #topbarToggle {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 1.1rem;
+      padding: 4px 7px;
+      border-radius: 6px;
+      line-height: 1;
+      display: none;
+      flex-shrink: 0;
+    }
+
+    #topbarToggle:hover { background: #2a2a2a; color: var(--text-primary); }
+    #topbarToggle.visible { display: block; }
+
+    #topbarTitle {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      pointer-events: none;
+    }
+
+    .topbar-actions { display: flex; gap: 8px; margin-left: auto; }
+
+    .action-btn {
+      background: none;
+      border: 1px solid #30363D;
+      color: var(--text-muted);
+      padding: 7px 14px;
+      border-radius: 8px;
+      font-size: 0.83rem;
+      font-family: inherit;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .action-btn:hover:not(:disabled) { border-color: #00D4AA; color: #00D4AA; }
+    #audioBtn.active                 { border-color: #F85149; color: #F85149; }
+    .action-btn:disabled             { opacity: 0.3; cursor: not-allowed; }
+
+    /* ── Nav progress bar ──────────────────────────────────────────────────── */
+    #navProgressBar {
+      height: 2px;
+      width: 0%;
+      background: #00D4AA;
+      flex-shrink: 0;
+      opacity: 0;
+      transition: width 0.6s ease, opacity 0.3s ease;
+    }
+    #navProgressBar.active { opacity: 1; }
+
+    /* ── Scrollable content ────────────────────────────────────────────────── */
+    #content {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 24px;
+      min-height: 0;
+    }
+
+    /* ── Hero ──────────────────────────────────────────────────────────────── */
+    #heroSection {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 60px 0 48px;
+      text-align: center;
+      width: 100%;
+    }
+
+    #heroSection img {
+      width: 64px;
+      height: 64px;
+      border-radius: 14px;
+      opacity: 0.9;
+      filter: brightness(0) invert(1);
+    }
+
+    #heroSection h2 {
+      font-size: 1.55rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.3px;
+    }
+
+    /* ── Progress log ──────────────────────────────────────────────────────── */
+    #progressWrap {
+      width: 100%;
+      max-width: 760px;
+      margin-top: 28px;
+      display: none;
+    }
+
+    #progressLog {
+      background: var(--bg-card);
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 16px 20px;
+      font-family: 'Menlo', 'Consolas', monospace;
+      font-size: 0.8rem;
+      line-height: 2;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+
+    .ev-start    { color: #00D4AA; }
+    .ev-cloning  { color: #8B949E; }
+    .ev-reading  { color: #8B949E; }
+    .ev-warning  { color: #FFAB40; }
+    .ev-pass_1, .ev-pass_2, .ev-pass_3, .ev-pass_4 { color: #E6EDF3; }
+    .ev-complete { color: #00D4AA; font-weight: 600; }
+    .ev-error    { color: #F85149; }
+
+    /* ── Output panel ──────────────────────────────────────────────────────── */
+    #outputPanel {
+      width: 100%;
+      max-width: 760px;
+      display: none;
+      flex-direction: column;
+      gap: 20px;
+      margin-top: 24px;
+    }
+
+    /* ── Text brief ────────────────────────────────────────────────────────── */
+    #textBriefWrap {
+      background: #1C2128;
+      border: 1px solid #30363D;
+      border-radius: 12px;
+      padding: 36px;
+    }
+
+    #textBriefStatus { color: var(--text-muted); font-size: 0.88rem; margin-bottom: 12px; }
+
+    #textBriefContent {
+      line-height: 1.8;
+      font-size: 0.92rem;
+      color: #ccc;
+    }
+
+    #textBriefContent h2 {
+      color: var(--text-primary);
+      font-size: 1rem;
+      font-weight: 600;
+      margin: 28px 0 6px;
+      border-left: 3px solid #00D4AA;
+      padding-left: 10px;
+    }
+
+    #textBriefContent h2:first-child { margin-top: 0; }
+    #textBriefContent h3 {
+      color: var(--text-primary);
+      font-size: 0.88rem;
+      font-weight: 600;
+      margin: 14px 0 4px;
+    }
+    #textBriefContent code {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: 'Menlo', 'Consolas', monospace;
+      font-size: 0.82em;
+      color: #e0e0e0;
+    }
+    #textBriefContent strong { color: var(--text-primary); font-weight: 600; }
+    #textBriefContent em { color: #b0b0c0; font-style: italic; }
+    #textBriefContent ul, #textBriefContent ol { padding-left: 20px; }
+    #textBriefContent li { margin: 6px 0; }
+    #textBriefContent p  { margin: 8px 0; }
+
+    /* ── Audio / transcript ────────────────────────────────────────────────── */
+    #audioWrap {
+      display: none;
+      background: var(--bg-card);
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 20px 24px;
+    }
+
+    #audioStatus { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px; }
+
+    #transcript {
+      font-size: 0.88rem;
+      color: #999;
+      line-height: 1.7;
+      max-height: 160px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    /* ── Input bar (pinned bottom) ─────────────────────────────────────────── */
+    #inputBarWrap {
+      width: 100%;
+      padding: 12px 24px 20px;
+      flex-shrink: 0;
+      display: flex;
+      justify-content: center;
+    }
+
+    #inputBar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-input);
+      border: 1px solid #3a3a3a;
+      border-radius: 14px;
+      padding: 10px 12px;
+      transition: border-color 0.15s;
+    }
+
+    #inputBar:focus-within { border-color: #555; }
+
+    .input-icon {
+      color: var(--text-muted);
+      font-size: 1rem;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+
+    #urlInput {
+      flex: 1;
+      background: none;
+      border: none;
+      outline: none;
+      color: var(--text-primary);
+      font-size: 0.92rem;
+      font-family: inherit;
+      min-width: 0;
+    }
+
+    #urlInput::placeholder { color: #484F58; }
+
+    #analyseBtn {
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1.1rem;
+      flex-shrink: 0;
+      transition: background 0.15s;
+      line-height: 1;
+    }
+
+    #analyseBtn:hover { background: #0d8a6a; }
+    #analyseBtn:disabled { background: #333; color: #555; cursor: not-allowed; }
+
+    /* ── Spinner ───────────────────────────────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 13px;
+      height: 13px;
+      border: 2px solid #333;
+      border-top-color: #64b5f6;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Sidebar session items ─────────────────────────────────────────────── */
+    .session-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      border-left: 2px solid transparent;
+    }
+    .session-item:hover { background: #252525; }
+    .session-item.active {
+      background: #252525;
+      border-left-color: var(--accent);
+    }
+    .session-name {
+      flex: 1;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .session-item:hover .session-name,
+    .session-item.active .session-name { color: var(--text-primary); }
+
+    .session-delete {
+      background: none;
+      border: none;
+      color: transparent;
+      font-size: 0.8rem;
+      padding: 2px 5px;
+      border-radius: 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .session-item:hover .session-delete { color: var(--text-muted); }
+    .session-delete:hover { color: #e57373 !important; background: #2a2a2a; }
+
+    /* ── Chat area ──────────────────────────────────────────────────────────── */
+    #chatArea {
+      display: none;
+      flex-direction: column;
+      width: 100%;
+      margin-top: 8px;
+      padding-bottom: 8px;
+    }
+
+    #chatMessages {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      width: 100%;
+    }
+
+    .msg-row {
+      display: flex;
+      width: 100%;
+    }
+    .msg-row-user { justify-content: flex-end; }
+    .msg-row-ai   { justify-content: flex-start; }
+
+    .msg-bubble { max-width: 82%; }
+
+    .msg-user {
+      background: #2f2f2f;
+      border-radius: 18px 18px 4px 18px;
+      padding: 11px 16px;
+      color: var(--text-primary);
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+
+    .msg-ai {
+      background: #1a1a1a;
+      border: 1px solid #2e2e2e;
+      border-radius: 4px 18px 18px 18px;
+      padding: 14px 18px;
+      font-size: 0.9rem;
+      line-height: 1.65;
+      color: #ccc;
+    }
+
+    .msg-ai .msg-text h2 {
+      color: var(--text-primary); font-size: 0.92rem; font-weight: 600;
+      margin: 16px 0 5px; padding-bottom: 3px; border-bottom: 1px solid #2e2e2e;
+    }
+    .msg-ai .msg-text h2:first-child { margin-top: 0; }
+    .msg-ai .msg-text h3 {
+      color: var(--text-primary); font-size: 0.86rem; font-weight: 600;
+      margin: 12px 0 4px;
+    }
+    .msg-ai .msg-text ul, .msg-ai .msg-text ol { padding-left: 18px; }
+    .msg-ai .msg-text li { margin: 3px 0; }
+    .msg-ai .msg-text p  { margin: 5px 0; }
+    .msg-ai .msg-text code {
+      background: #252525; border: 1px solid #333; border-radius: 4px;
+      padding: 1px 5px; font-family: 'Menlo','Consolas',monospace;
+      font-size: 0.82em; color: #e0e0e0;
+    }
+    .msg-ai .msg-text strong { color: var(--text-primary); font-weight: 600; }
+
+    /* Blinking cursor while AI is streaming */
+    .msg-ai.streaming .msg-text::after {
+      content: '▋';
+      display: inline-block;
+      color: var(--accent);
+      animation: blink 0.8s step-end infinite;
+      margin-left: 2px;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ── Responsive ────────────────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      #sidebar { width: 0; min-width: 0; }
+      #topbarToggle { display: block !important; }
+
+      #sidebar.mobile-open {
+        width: var(--sidebar-w);
+        min-width: var(--sidebar-w);
+        position: fixed;
+        z-index: 100;
+        top: 0;
+        left: 0;
+        height: 100vh;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────────────── -->
+<nav id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">
+      <img src="ios-compass-7.png" alt="Compass" />
+      <span>Compass</span>
+    </div>
+    <button id="sidebarToggle" title="Collapse sidebar">&#9776;</button>
+  </div>
+
+  <div class="sidebar-divider"></div>
+
+  <button id="newAnalysisBtn">&#43;&nbsp; New Analysis</button>
+
+  <div class="sidebar-divider"></div>
+
+  <div class="sidebar-section-label">Recent</div>
+  <div id="recentList"></div>
+</nav>
+
+<!-- ── Main area ──────────────────────────────────────────────────────────── -->
+<div id="main">
+
+  <!-- Top navbar -->
+  <div id="topbar">
+    <button id="topbarToggle" title="Open sidebar">&#9776;</button>
+    <div id="topbarTitle">Compass</div>
+    <div class="topbar-actions">
+      <button id="audioBtn" class="action-btn" disabled style="display:none">🎙 Audio Brief</button>
+      <button id="pdfBtn"   class="action-btn" disabled style="display:none">📄 PDF</button>
+    </div>
+  </div>
+
+  <!-- Nav progress bar -->
+  <div id="navProgressBar"></div>
+
+  <!-- Scrollable content -->
+  <div id="content">
+
+    <!-- Hero -->
+    <div id="heroSection">
+      <img src="ios-compass-7.png" alt="Compass" />
+      <h2>What repo can I analyse for you?</h2>
+    </div>
+
+    <!-- Progress log -->
+    <div id="progressWrap">
+      <div id="progressLog"></div>
+    </div>
+
+    <!-- Output panel -->
+    <div id="outputPanel">
+      <div id="audioWrap">
+        <div id="audioStatus">Connecting...</div>
+        <div id="transcript"></div>
+      </div>
+
+      <div id="textBriefWrap">
+        <div id="textBriefStatus"><span class="spinner"></span>Generating text brief...</div>
+        <div id="textBriefContent"></div>
+      </div>
+
+      <!-- Chat area — shown after analysis completes -->
+      <div id="chatArea">
+        <div id="chatMessages"></div>
+      </div>
+    </div>
+
+    <!-- Spacer so content doesn't hide behind input bar -->
+    <div style="flex:1; min-height: 16px;"></div>
+
+  </div><!-- /content -->
+
+  <!-- Input bar pinned to bottom -->
+  <div id="inputBarWrap">
+    <div id="inputBar" style="width:100%; max-width:760px;">
+      <span class="input-icon">&#128279;</span>
+      <input id="urlInput" type="text" placeholder="Paste a GitHub URL to get started" />
+      <button id="analyseBtn" title="Analyse">&#8593;</button>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<script src="js/audio-manager.js"></script>
+<script src="js/main.js"></script>
+
+</body>
+</html>
