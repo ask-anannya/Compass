@@ -1,32 +1,32 @@
 // ── Elements ──────────────────────────────────────────────────────────────────
-const urlInput         = document.getElementById('urlInput');
-const analyseBtn       = document.getElementById('analyseBtn');
-const progressWrap     = document.getElementById('progressWrap');
-const progressLog      = document.getElementById('progressLog');
-const outputPanel      = document.getElementById('outputPanel');
-const audioBtn         = document.getElementById('audioBtn');
-const pdfBtn           = document.getElementById('pdfBtn');
-const audioWrap        = document.getElementById('audioWrap');
-const audioStatus      = document.getElementById('audioStatus');
-const transcriptEl     = document.getElementById('transcript');
-const textBriefStatus  = document.getElementById('textBriefStatus');
+const urlInput = document.getElementById('urlInput');
+const analyseBtn = document.getElementById('analyseBtn');
+const progressWrap = document.getElementById('progressWrap');
+const progressLog = document.getElementById('progressLog');
+const outputPanel = document.getElementById('outputPanel');
+const audioBtn    = document.getElementById('audioBtn');
+const diagramBtn  = document.getElementById('diagramBtn');
+const pdfBtn      = document.getElementById('pdfBtn');
+const textBriefStatus = document.getElementById('textBriefStatus');
 const textBriefContent = document.getElementById('textBriefContent');
-const heroSection      = document.getElementById('heroSection');
-const sidebar          = document.getElementById('sidebar');
-const sidebarToggle    = document.getElementById('sidebarToggle');
-const topbarToggle     = document.getElementById('topbarToggle');
-const newAnalysisBtn   = document.getElementById('newAnalysisBtn');
-const recentList       = document.getElementById('recentList');
-const chatArea         = document.getElementById('chatArea');
-const chatMessages     = document.getElementById('chatMessages');
-const content          = document.getElementById('content');
-const navProgressBar   = document.getElementById('navProgressBar');
+const heroSection = document.getElementById('heroSection');
+const sidebar = document.getElementById('sidebar');
+const sidebarToggle = document.getElementById('sidebarToggle');
+const topbarToggle = document.getElementById('topbarToggle');
+const newAnalysisBtn = document.getElementById('newAnalysisBtn');
+const recentList = document.getElementById('recentList');
+const chatArea = document.getElementById('chatArea');
+const chatMessages = document.getElementById('chatMessages');
+const content = document.getElementById('content');
+const navProgressBar = document.getElementById('navProgressBar');
 
 // ── App state ─────────────────────────────────────────────────────────────────
 let currentSessionId = null;
-let audioManager     = null;
-let audioActive      = false;
-let appMode          = 'url'; // 'url' | 'chat'
+let audioManager = null;
+let audioActive = false;
+let _audioBubble = null;   // current AI bubble receiving transcript
+let _audioTranscript = '';     // accumulated text for the current turn
+let appMode = 'url'; // 'url' | 'chat'
 
 // ── Session store (localStorage) ─────────────────────────────────────────────
 const SESSIONS_KEY = 'compass_sessions';
@@ -78,13 +78,13 @@ function renderSidebar() {
     item.className = 'session-item' + (s.sessionId === currentSessionId ? ' active' : '');
 
     const name = document.createElement('span');
-    name.className   = 'session-name';
+    name.className = 'session-name';
     name.textContent = s.repoName || s.sessionId.slice(0, 8);
 
     const del = document.createElement('button');
-    del.className   = 'session-delete';
+    del.className = 'session-delete';
     del.textContent = '🗑';
-    del.title       = 'Delete session';
+    del.title = 'Delete session';
     del.addEventListener('click', e => { e.stopPropagation(); deleteSession(s.sessionId); });
 
     item.appendChild(name);
@@ -105,21 +105,21 @@ function loadSession(sessionId) {
   currentSessionId = sessionId;
 
   // Reset all panels
-  progressLog.innerHTML       = '';
-  progressWrap.style.display  = 'none';
-  textBriefContent.innerHTML  = '';
+  progressLog.innerHTML = '';
+  progressWrap.style.display = 'none';
+  textBriefContent.innerHTML = '';
   textBriefStatus.textContent = '';
-  transcriptEl.textContent    = '';
-  chatMessages.innerHTML      = '';
-  chatArea.style.display      = 'none';
-  audioWrap.style.display     = 'none';
-  heroSection.style.display   = 'none';
+  chatMessages.innerHTML = '';
+  chatArea.style.display = 'none';
+  heroSection.style.display = 'none';
 
   outputPanel.style.display = 'flex';
-  audioBtn.style.display    = '';
-  pdfBtn.style.display      = '';
+  audioBtn.style.display = '';
+  diagramBtn.style.display = '';
+  pdfBtn.style.display = '';
   audioBtn.disabled = false;
-  pdfBtn.disabled   = false;
+  diagramBtn.disabled = false;
+  pdfBtn.disabled = false;
 
   if (session.textBrief) renderMarkdown(session.textBrief, textBriefContent);
 
@@ -137,28 +137,28 @@ function loadSession(sessionId) {
 // ── Reset to URL mode ─────────────────────────────────────────────────────────
 function resetToUrlMode() {
   stopAudio();
-  appMode          = 'url';
+  appMode = 'url';
   currentSessionId = null;
 
-  heroSection.style.display   = 'flex';
-  outputPanel.style.display   = 'none';
-  progressWrap.style.display  = 'none';
-  progressLog.innerHTML       = '';
-  textBriefContent.innerHTML  = '';
+  heroSection.style.display = 'flex';
+  outputPanel.style.display = 'none';
+  progressWrap.style.display = 'none';
+  progressLog.innerHTML = '';
+  textBriefContent.innerHTML = '';
   textBriefStatus.textContent = '';
-  transcriptEl.textContent    = '';
-  chatMessages.innerHTML      = '';
-  chatArea.style.display      = 'none';
-  audioWrap.style.display     = 'none';
+  chatMessages.innerHTML = '';
+  chatArea.style.display = 'none';
 
   audioBtn.style.display = 'none';
-  pdfBtn.style.display   = 'none';
+  diagramBtn.style.display = 'none';
+  pdfBtn.style.display = 'none';
   audioBtn.disabled = true;
-  pdfBtn.disabled   = true;
+  diagramBtn.disabled = true;
+  pdfBtn.disabled = true;
 
   urlInput.placeholder = 'Paste a GitHub URL to get started';
-  urlInput.value       = '';
-  analyseBtn.disabled  = false;
+  urlInput.value = '';
+  analyseBtn.disabled = false;
   urlInput.focus();
 }
 
@@ -171,28 +171,27 @@ newAnalysisBtn.addEventListener('click', () => {
 // ── Ingestion ─────────────────────────────────────────────────────────────────
 analyseBtn.addEventListener('click', () => {
   if (appMode === 'chat') sendChatMessage();
-  else                    startIngestion();
+  else startIngestion();
 });
 
 urlInput.addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   if (appMode === 'chat') sendChatMessage();
-  else                    startIngestion();
+  else startIngestion();
 });
 
 async function startIngestion() {
   const url = urlInput.value.trim();
   if (!url) return;
 
-  analyseBtn.disabled         = true;
-  progressLog.innerHTML       = '';
-  progressWrap.style.display  = 'block';
-  outputPanel.style.display   = 'none';
-  textBriefContent.innerHTML  = '';
-  textBriefStatus.innerHTML   = '';
-  transcriptEl.textContent    = '';
-  currentSessionId            = null;
-  heroSection.style.display   = 'none';
+  analyseBtn.disabled = true;
+  progressLog.innerHTML = '';
+  progressWrap.style.display = 'block';
+  outputPanel.style.display = 'none';
+  textBriefContent.innerHTML = '';
+  textBriefStatus.innerHTML = '';
+  currentSessionId = null;
+  heroSection.style.display = 'none';
 
   // Nav progress bar
   navProgressBar.style.width = '0%';
@@ -200,12 +199,12 @@ async function startIngestion() {
 
   try {
     const resp = await fetch('/ingest', {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ github_url: url }),
+      body: JSON.stringify({ github_url: url }),
     });
 
-    const reader  = resp.body.getReader();
+    const reader = resp.body.getReader();
     const decoder = new TextDecoder();
 
     while (true) {
@@ -215,9 +214,9 @@ async function startIngestion() {
         if (!line.startsWith('data: ')) continue;
         const ev = JSON.parse(line.slice(6));
         appendProgress(ev.event, ev.msg || ev.session_id || '');
-        if (ev.event === 'start')    currentSessionId = ev.session_id;
+        if (ev.event === 'start') currentSessionId = ev.session_id;
         if (ev.event === 'complete') onIngestionComplete(ev.session_id, url);
-        if (ev.event === 'error')    analyseBtn.disabled = false;
+        if (ev.event === 'error') analyseBtn.disabled = false;
       }
     }
   } catch (err) {
@@ -229,11 +228,11 @@ async function startIngestion() {
 // ── Progress log ──────────────────────────────────────────────────────────────
 const PASS_EVENTS = new Set(['pass_1', 'pass_2', 'pass_3', 'pass_4']);
 let _lastPassType = null;
-let _tickerEl     = null;
+let _tickerEl = null;
 
 const NAV_PROGRESS = {
   cloning: '10%', reading: '20%',
-  pass_1:  '35%', pass_2:  '55%', pass_3: '72%', pass_4: '90%',
+  pass_1: '35%', pass_2: '55%', pass_3: '72%', pass_4: '90%',
 };
 
 function appendProgress(event, msg) {
@@ -260,7 +259,7 @@ function appendProgress(event, msg) {
   }
 
   _lastPassType = isPass ? event : null;
-  _tickerEl     = null;
+  _tickerEl = null;
 
   const line = document.createElement('div');
   line.className = `ev-${event}`;
@@ -287,14 +286,16 @@ function appendProgress(event, msg) {
 
 // ── Post-ingestion ────────────────────────────────────────────────────────────
 async function onIngestionComplete(sessionId, repoUrl) {
-  currentSessionId          = sessionId;
+  currentSessionId = sessionId;
   outputPanel.style.display = 'flex';
-  audioBtn.style.display    = '';
-  pdfBtn.style.display      = '';
-  audioBtn.disabled         = false;
-  pdfBtn.disabled           = false;
+  audioBtn.style.display = '';
+  diagramBtn.style.display = '';
+  pdfBtn.style.display = '';
+  audioBtn.disabled = false;
+  diagramBtn.disabled = false;
+  pdfBtn.disabled = false;
 
-  const match    = (repoUrl || '').match(/github\.com\/[^/]+\/([^/]+)/);
+  const match = (repoUrl || '').match(/github\.com\/[^/]+\/([^/]+)/);
   const repoName = match ? match[1].replace(/\.git$/, '') : sessionId.slice(0, 8);
 
   textBriefStatus.innerHTML = '<span class="spinner"></span>Generating text brief...';
@@ -318,37 +319,42 @@ async function onIngestionComplete(sessionId, repoUrl) {
 
 // ── Chat mode ─────────────────────────────────────────────────────────────────
 function activateChatMode() {
-  appMode                  = 'chat';
-  urlInput.placeholder     = 'Ask anything about this codebase...';
-  chatArea.style.display   = 'flex';
+  appMode = 'chat';
+  urlInput.placeholder = 'Ask anything about this codebase...';
+  chatArea.style.display = 'flex';
   if (!chatMessages.children.length) {
     appendMessage('ai', 'Ready — ask me anything about this codebase.');
   }
   urlInput.focus();
 }
 
-async function sendChatMessage() {
+function sendChatMessage() {
   const text = urlInput.value.trim();
   if (!text || !currentSessionId) return;
+  urlInput.value = '';
+  sendMessage(text);
+}
 
-  urlInput.value      = '';
+async function sendMessage(text) {
+  if (!text || !currentSessionId) return;
+
   analyseBtn.disabled = true;
 
   appendMessage('user', text);
   const aiBubble = appendMessage('ai', '', true); // streaming=true
-  const textEl   = aiBubble.querySelector('.msg-text');
+  const textEl = aiBubble.querySelector('.msg-text');
 
   let fullResponse = '';
   try {
     const resp = await fetch(`/chat/${currentSessionId}`, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message: text }),
+      body: JSON.stringify({ message: text }),
     });
 
-    const reader  = resp.body.getReader();
+    const reader = resp.body.getReader();
     const decoder = new TextDecoder();
-    let   buffer  = '';
+    let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -376,10 +382,10 @@ async function sendChatMessage() {
 
   // Persist turns to localStorage
   const sessions = getSessions();
-  const session  = sessions.find(s => s.sessionId === currentSessionId);
+  const session = sessions.find(s => s.sessionId === currentSessionId);
   if (session) {
     session.chatHistory = session.chatHistory || [];
-    session.chatHistory.push({ role: 'user',  text });
+    session.chatHistory.push({ role: 'user', text });
     session.chatHistory.push({ role: 'model', text: fullResponse });
     if (session.chatHistory.length > 40) session.chatHistory = session.chatHistory.slice(-40);
     saveSessions(sessions);
@@ -387,7 +393,7 @@ async function sendChatMessage() {
 }
 
 function appendMessage(role, text, streaming = false) {
-  const row    = document.createElement('div');
+  const row = document.createElement('div');
   row.className = `msg-row msg-row-${role}`;
 
   const bubble = document.createElement('div');
@@ -408,15 +414,15 @@ function appendMessage(role, text, streaming = false) {
 
 // ── Markdown rendering ────────────────────────────────────────────────────────
 function escapeHtml(t) {
-  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function inlineMarkdown(text) {
   return escapeHtml(text)
-    .replace(/`([^`]+)`/g,        '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g,  '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g,      '<em>$1</em>')
-    .replace(/_([^_]+)_/g,        '<em>$1</em>');
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/_([^_]+)_/g, '<em>$1</em>');
 }
 
 function markdownToHtml(md) {
@@ -464,22 +470,50 @@ function renderMarkdown(md, el) {
 // ── Audio brief ───────────────────────────────────────────────────────────────
 audioBtn.addEventListener('click', () => {
   if (audioActive) stopAudio();
-  else             startAudio();
+  else startAudio();
 });
+
+function _newAudioBubble() {
+  _audioTranscript = '';
+  _audioBubble = appendMessage('ai', '', true);
+}
+
+function _finaliseAudioBubble() {
+  if (_audioBubble) {
+    _audioBubble.classList.remove('streaming');
+    _audioBubble = null;
+    _audioTranscript = '';
+  }
+}
+
+function appendSystemMsg(text) {
+  const el = document.createElement('div');
+  el.style.cssText = 'text-align:center;font-size:0.75rem;color:#484F58;padding:4px 0;';
+  el.textContent = text;
+  chatMessages.appendChild(el);
+  content.scrollTop = content.scrollHeight;
+}
 
 function startAudio() {
   if (!currentSessionId) return;
-  audioActive              = true;
-  audioBtn.textContent     = '⏹ Stop Audio Brief';
+  audioActive = true;
+  audioBtn.textContent = '⏹ Stop Live Assistant';
   audioBtn.classList.add('active');
-  audioWrap.style.display  = 'block';
-  transcriptEl.textContent = '';
-  audioStatus.textContent  = 'Connecting...';
+  appendSystemMsg('🎙 Live Assistant starting...');
+  _newAudioBubble();
 
   audioManager = new AudioManager(
     currentSessionId,
-    text   => { transcriptEl.textContent += text + ' '; transcriptEl.scrollTop = transcriptEl.scrollHeight; },
-    status => { audioStatus.textContent = status; }
+    text => {
+      if (!_audioBubble) _newAudioBubble();
+      _audioTranscript += text + ' ';
+      _audioBubble.querySelector('.msg-text').innerHTML = markdownToHtml(_audioTranscript);
+      content.scrollTop = content.scrollHeight;
+    },
+    status => appendSystemMsg(status),
+    () => _finaliseAudioBubble(),
+    text => sendMessage(text),
+    ()   => generateDiagram(),
   );
   audioManager.start();
 }
@@ -487,10 +521,62 @@ function startAudio() {
 function stopAudio() {
   if (!audioActive) return;
   audioActive = false;
-  audioBtn.textContent = '🎙 Audio Brief';
+  audioBtn.textContent = '🎙 Live Assistant';
   audioBtn.classList.remove('active');
+  _finaliseAudioBubble();
   if (audioManager) { audioManager.stop(); audioManager = null; }
 }
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+const lightbox = document.createElement('div');
+lightbox.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;cursor:zoom-out;align-items:center;justify-content:center;';
+const lightboxImg = document.createElement('img');
+lightboxImg.style.cssText = 'max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.6);';
+lightbox.appendChild(lightboxImg);
+document.body.appendChild(lightbox);
+lightbox.addEventListener('click', () => { lightbox.style.display = 'none'; });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') lightbox.style.display = 'none'; });
+
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.style.display = 'flex';
+}
+
+// ── Architecture diagram ──────────────────────────────────────────────────────
+async function generateDiagram() {
+  if (!currentSessionId) return;
+  diagramBtn.textContent = '⏳ Generating...';
+  diagramBtn.disabled = true;
+
+  appendSystemMsg('📊 Generating architecture diagram...');
+
+  try {
+    const resp = await fetch(`/brief/diagram/${currentSessionId}`);
+    if (!resp.ok) throw new Error(`Server error ${resp.status}`);
+    const { image, mime_type } = await resp.json();
+
+    const row = document.createElement('div');
+    row.className = 'msg-row msg-row-ai';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble msg-ai';
+    const img = document.createElement('img');
+    img.src = `data:${mime_type};base64,${image}`;
+    img.style.cssText = 'max-width:100%;border-radius:8px;display:block;cursor:zoom-in;';
+    img.title = 'Click to expand';
+    img.addEventListener('click', () => openLightbox(img.src));
+    bubble.appendChild(img);
+    row.appendChild(bubble);
+    chatMessages.appendChild(row);
+    content.scrollTop = content.scrollHeight;
+  } catch (err) {
+    appendSystemMsg(`Diagram error: ${err.message}`);
+  }
+
+  diagramBtn.textContent = '📊 Diagram';
+  diagramBtn.disabled = false;
+}
+
+diagramBtn.addEventListener('click', generateDiagram);
 
 // ── PDF download ──────────────────────────────────────────────────────────────
 pdfBtn.addEventListener('click', () => {

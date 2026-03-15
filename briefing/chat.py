@@ -4,7 +4,15 @@ from knowledge.graph import load, to_context_string
 from knowledge.conversations import get_history
 
 client = genai.Client()
-MODEL  = 'gemini-3-flash-preview'
+MODEL_CHAT = 'gemini-3-flash-preview'
+MODEL_PLAN = 'gemini-3.1-pro-preview'
+
+_PLAN_KEYWORDS = (
+    'implementation plan', 'implement', 'how to add', 'how to build',
+    'how to create', 'how to change', 'how to modify', 'how to fix',
+    'how would i', 'how do i', 'plan for', 'make a plan', 'write a plan',
+    'step by step', 'steps to', 'approach for', 'refactor',
+)
 
 CHAT_SYSTEM = """You are an expert on this specific codebase.
 Answer questions concisely and precisely.
@@ -47,12 +55,15 @@ async def stream_chat_response(session_id: str, message: str):
         parts=[types.Part.from_text(text=message)]
     ))
 
+    msg_lower = message.lower()
+    model = MODEL_PLAN if any(kw in msg_lower for kw in _PLAN_KEYWORDS) else MODEL_CHAT
+
     config = types.GenerateContentConfig(
         system_instruction=CHAT_SYSTEM,
     )
 
     async for chunk in await client.aio.models.generate_content_stream(
-        model=MODEL,
+        model=model,
         contents=contents,
         config=config,
     ):

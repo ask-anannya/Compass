@@ -10,15 +10,16 @@ graph TD
     FastAPI["FastAPI (main.py)"]
     Ingestion["ingestion/\nclone → read → analyse"]
     Knowledge["knowledge/\nin-memory graph store"]
-    Briefing["briefing/\ntext · audio · pdf · chat"]
+    Briefing["briefing/\ntext · audio · diagram · pdf · chat"]
     Gemini["Gemini API"]
     ADK["Google ADK\n(Gemini Live)"]
 
     Browser -->|"POST /ingest (SSE)"| FastAPI
     Browser -->|"GET /brief/text"| FastAPI
     Browser -->|"GET /brief/pdf"| FastAPI
+    Browser -->|"GET /brief/diagram"| FastAPI
     Browser -->|"POST /chat (SSE)"| FastAPI
-    Browser -->|"WS /ws (bidi audio)"| FastAPI
+    Browser -->|"WS /brief/audio (bidi)"| FastAPI
 
     FastAPI --> Ingestion
     FastAPI --> Briefing
@@ -123,17 +124,17 @@ The four pass results are merged into a single knowledge graph dict:
 
 ### 3. Knowledge graph store (`knowledge/graph.py`)
 
-A module-level `dict[str, dict]` keyed by `session_id`. No persistence — graphs are lost on server restart. `to_context_string()` flattens the graph to a compact ~8 000-token string used as context injection for all downstream outputs (text brief, chat, audio brief).
+A module-level `dict[str, dict]` keyed by `session_id`. No persistence — graphs are lost on server restart. `to_context_string()` flattens the graph to a compact ~8 000-token string used as context injection for all downstream outputs (text brief, chat, audio brief, diagram).
 
 > **Production note:** replace `_store` with Redis + 2-hour TTL.
 
 ### 4. Text brief (`GET /brief/text/{session_id}`)
 
-Loads the graph, calls `to_context_string()`, and sends a single non-streaming `generate_content` call to `gemini-3-flash-preview` with a fixed formatting prompt. Returns `{ brief: string, graph: dict }` — the `graph` field is used by the frontend after ingestion.
+Loads the graph, calls `to_context_string()`, and sends a single non-streaming `generate_content` call to `gemini-3-flash-preview` with a fixed formatting prompt. Returns `{ brief: string, graph: dict }`.
 
 ### 5. Chat (`POST /chat/{session_id}`)
 
-SSE-streamed multi-turn chat grounded in the knowledge graph.
+SSE-streamed multi-turn chat grounded in the knowledge graph. Messages are inspected against `_PLAN_KEYWORDS` — if matched, the request is routed to `gemini-3.1-pro-preview` for a detailed implementation plan; otherwise `gemini-3-flash-preview` handles it.
 
 ```mermaid
 sequenceDiagram
@@ -149,6 +150,7 @@ sequenceDiagram
     C->>C: to_context_string(graph)
     C->>H: get_history(session_id)
     Note over C: Build contents[]:<br/>seed context turn<br/>+ prior history (≤40)<br/>+ new message
+    C->>C: route to flash or pro<br/>based on plan keywords
     C->>G: generate_content_stream(contents)
     G-->>C: text chunks
     C-->>R: yield chunk
@@ -159,9 +161,9 @@ sequenceDiagram
 
 Chat history is also persisted in `localStorage` on the client and replayed on session load, so the UI survives server restarts.
 
-### 6. Audio brief (`WebSocket /ws/{session_id}`)
+### 6. Live Assistant (`WebSocket /brief/audio/{session_id}`)
 
-Uses Google ADK (`google-adk`) for bidirectional audio via Gemini Live.
+Uses Google ADK (`google-adk`) for bidirectional audio via Gemini Live. Four concurrent asyncio tasks run per session.
 
 ```mermaid
 sequenceDiagram
@@ -170,10 +172,10 @@ sequenceDiagram
     participant ADK as Google ADK
     participant G as Gemini Live
 
-    B->>WS: WS connect /ws/{session_id}
+    B->>WS: WS connect /brief/audio/{session_id}
     WS->>ADK: create_session(adk_session_id)
     WS->>ADK: queue.send_content(knowledge_graph)
-    Note over WS: asyncio.create_task × 2
+    Note over WS: asyncio.create_task × 4
 
     par upstream_task
         loop mic frames
@@ -185,26 +187,46 @@ sequenceDiagram
     and downstream_task
         ADK->>G: runner.run_live(BIDI)
         loop audio parts
-            G-->>ADK: audio PCM 24kHz
-            ADK-->>WS: event.content.parts
+            G-->>WS: event.content.parts (audio)
             WS-->>B: {event:audio, data:base64}
         end
-        G-->>ADK: transcript text
-        ADK-->>WS: event.content.parts
+        G-->>WS: event.output_transcription (spoken text)
         WS-->>B: {event:transcript, text}
-        G-->>ADK: turn_complete
+        G-->>WS: turn_complete
         WS-->>B: {event:ready}
+        G-->>WS: function_call (tool invoked by agent)
+        ADK->>ADK: execute tool, send function_response
+    and plan_task
+        Note over WS: drains plan_queue
+        WS-->>B: {event:plan_requested, text}
+    and diagram_task
+        Note over WS: drains diagram_queue
+        WS-->>B: {event:diagram_requested}
     end
 
-    Note over WS: asyncio.wait(FIRST_COMPLETED)<br/>cancels the other task
+    Note over WS: asyncio.wait(FIRST_COMPLETED)<br/>cancels remaining tasks
 ```
 
-- **Agent singleton** (`briefing/agent.py`): `Agent` + `Runner` + `InMemorySessionService` — initialised once at import time.
+**Tool calling:** The ADK agent (`briefing/agent.py`) has two registered tools:
+- `request_implementation_plan(description)` — puts description onto a `ContextVar`-backed `asyncio.Queue`; `plan_task` drains it and emits `plan_requested` over the WebSocket; frontend calls `sendMessage(text)` to trigger the full chat pipeline
+- `request_architecture_diagram()` — same pattern; frontend calls `generateDiagram()`
+
+**Transcript:** Uses `event.output_transcription` (server-side transcription of synthesised audio) rather than `event.content.parts[].text` (which includes internal reasoning). Partial chunks are streamed in real time; the final `finished=True` event is skipped to avoid duplication.
+
+**Interruption:** All scheduled `AudioBufferSourceNode`s are tracked in `activeSources[]`. On `interrupted` event or manual stop, `.stop()` is called on each — eliminating residual audio that `suspend/resume` tricks cannot cancel. Echo cancellation on the mic prevents the model's own speaker output from triggering false VAD detections.
+
 - **Model**: `gemini-2.5-flash-native-audio-preview-12-2025`
 - **Streaming mode**: `StreamingMode.BIDI` — full-duplex
 - **Voice**: Charon (prebuilt)
+- **Transcript**: `output_audio_transcription` enabled by default in `RunConfig`
 
-### 7. PDF (`GET /brief/pdf/{session_id}`)
+### 7. Architecture Diagram (`GET /brief/diagram/{session_id}`)
+
+Loads the knowledge graph and builds a structured prompt from it (architecture pattern, framework, features as subsystems, key files as leaf nodes). Sends it to `gemini-3-pro-image-preview` with `response_modalities=['IMAGE']`. Returns `{ image: base64, mime_type: "image/jpeg" }`.
+
+The frontend embeds it as a `data:` URL in an AI chat bubble. Clicking the image opens a fullscreen lightbox overlay; `Escape` or clicking outside closes it.
+
+### 8. PDF (`GET /brief/pdf/{session_id}`)
 
 Generates the text brief, then renders it to a PDF in memory using ReportLab. Returned as `application/pdf` with `Content-Disposition: attachment`.
 
@@ -241,43 +263,28 @@ localStorage['compass_sessions']: Session[]
 
 Sessions are the single source of truth for the sidebar. The server holds nothing the browser needs to restore a session — it only needs a live server for new chat messages.
 
-### Ingestion flow (JS)
-
-```mermaid
-flowchart TD
-    A["startIngestion()"] --> B["POST /ingest SSE"]
-    B --> C["appendProgress(event, msg)"]
-    C --> D["nav progress bar width"]
-    C --> E["terminal log line\nev-* colour class"]
-    B --> F{"SSE event = complete?"}
-    F -->|no| C
-    F -->|yes| G["onIngestionComplete()"]
-    G --> H["GET /brief/text\nrenderMarkdown()"]
-    G --> I["upsertSession()\nlocalStorage"]
-    G --> J["activateChatMode()"]
-    J --> K["show audioBtn + pdfBtn\nplaceholder → chat mode"]
-```
-
 ### Audio pipeline (JS — `audio-manager.js`)
 
 ```mermaid
 flowchart LR
     subgraph Capture
-        MIC["getUserMedia\n16 kHz"] --> SPN["ScriptProcessorNode\n4096 samples"]
-        SPN --> DS["downsample"] --> B64["base64 encode"]
+        MIC["getUserMedia\n16 kHz\nechoCancellation=true"] --> SPN["ScriptProcessorNode\n4096 samples"]
+        SPN --> PCM["float→int16"] --> B64["base64 encode"]
     end
 
     subgraph Transport
         B64 -->|"WS {type:audio}"| WS["WebSocket"]
         WS -->|"{event:audio}"| RECV["receive frames"]
+        WS -->|"{event:transcript}"| TR["append to bubble"]
+        WS -->|"{event:plan_requested}"| PLAN["sendMessage(text)"]
+        WS -->|"{event:diagram_requested}"| DIAG["generateDiagram()"]
     end
 
     subgraph Playback
-        RECV --> Q["frame queue"]
-        Q --> JB{"buffered\n≥ 180ms?"}
-        JB -->|no| Q
-        JB -->|yes| SCHED["source.start(nextStartTime)\npre-scheduled timestamps"]
-        SCHED --> AC["AudioContext 24kHz\ngapless output"]
+        RECV --> Q["frame queue + jitter buffer\n180 ms hold"]
+        Q --> SCHED["source.start(nextStartTime)\npre-scheduled timestamps"]
+        SCHED --> TRACK["activeSources[]\nstop() on interrupt"]
+        TRACK --> AC["AudioContext 24kHz\ngapless output"]
     end
 ```
 
@@ -295,14 +302,16 @@ flowchart TD
 
     TextBrief["GET /brief/text\ngemini-3-flash-preview\n→ markdown string"]
     PDF["GET /brief/pdf\nReportLab → PDF bytes"]
-    Chat["POST /chat\ngemini-3-flash-preview\nSSE text chunks"]
-    Audio["WS /ws\nADK + Gemini Live\nbidi PCM audio"]
+    Chat["POST /chat\nflash (general) or pro (plans)\nSSE text chunks"]
+    Audio["WS /brief/audio\nADK + Gemini Live\nbidi PCM audio + tools"]
+    Diagram["GET /brief/diagram\ngemini-3-pro-image-preview\n→ JPEG image"]
 
     URL --> Clone --> Read --> Passes --> Graph
     Graph --> TextBrief
     Graph --> PDF
     Graph --> Chat
     Graph --> Audio
+    Graph --> Diagram
 ```
 
 ---

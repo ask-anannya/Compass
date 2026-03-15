@@ -355,25 +355,6 @@
     #textBriefContent li { margin: 6px 0; }
     #textBriefContent p  { margin: 8px 0; }
 
-    /* ── Audio / transcript ────────────────────────────────────────────────── */
-    #audioWrap {
-      display: none;
-      background: var(--bg-card);
-      border: 1px solid #333;
-      border-radius: 12px;
-      padding: 20px 24px;
-    }
-
-    #audioStatus { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px; }
-
-    #transcript {
-      font-size: 0.88rem;
-      color: #999;
-      line-height: 1.7;
-      max-height: 160px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-    }
 
     /* ── Input bar (pinned bottom) ─────────────────────────────────────────── */
     #inputBarWrap {
@@ -612,8 +593,9 @@
     <button id="topbarToggle" title="Open sidebar">&#9776;</button>
     <div id="topbarTitle">Compass</div>
     <div class="topbar-actions">
-      <button id="audioBtn" class="action-btn" disabled style="display:none">🎙 Audio Brief</button>
-      <button id="pdfBtn"   class="action-btn" disabled style="display:none">📄 PDF</button>
+      <button id="audioBtn"   class="action-btn" disabled style="display:none">🎙 Live Assistant</button>
+      <button id="diagramBtn" class="action-btn" disabled style="display:none">📊 Diagram</button>
+      <button id="pdfBtn"     class="action-btn" disabled style="display:none">📄 PDF</button>
     </div>
   </div>
 
@@ -636,11 +618,6 @@
 
     <!-- Output panel -->
     <div id="outputPanel">
-      <div id="audioWrap">
-        <div id="audioStatus">Connecting...</div>
-        <div id="transcript"></div>
-      </div>
-
       <div id="textBriefWrap">
         <div id="textBriefStatus"><span class="spinner"></span>Generating text brief...</div>
         <div id="textBriefContent"></div>

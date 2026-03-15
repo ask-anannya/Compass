@@ -1,14 +1,18 @@
 const JITTER_MS = 180; // hold playback until this many ms are buffered
 
 class AudioManager {
-  constructor(sessionId, onTranscript, onStatus) {
-    this.sessionId    = sessionId;
-    this.onTranscript = onTranscript;
-    this.onStatus     = onStatus;
+  constructor(sessionId, onTranscript, onStatus, onTurnEnd, onPlanRequested, onDiagramRequested) {
+    this.sessionId       = sessionId;
+    this.onTranscript    = onTranscript;
+    this.onStatus        = onStatus;
+    this.onTurnEnd          = onTurnEnd          || (() => {});
+    this.onPlanRequested    = onPlanRequested    || (() => {});
+    this.onDiagramRequested = onDiagramRequested || (() => {});
 
     this.audioCtx24   = new AudioContext({ sampleRate: 24000 });
     this.audioCtx16   = null;
     this.audioQueue    = [];
+    this.activeSources = [];   // scheduled BufferSourceNodes so we can stop them
     this.bufferedMs    = 0;    // ms of audio waiting in queue
     this.nextStartTime = 0;    // Web Audio clock time for next chunk to start
     this.micStream    = null;
@@ -25,21 +29,22 @@ class AudioManager {
 
     this.ws.onopen = () => {
       console.log('[AudioManager] WebSocket opened (101 received)');
-      this.onStatus('Briefing starting...');
       // Do NOT start mic here — wait for 'ready' event after initial briefing
     };
 
     this.ws.onmessage = async (e) => {
       const msg = JSON.parse(e.data);
       if (msg.event === 'audio')       this._enqueueAudio(msg.data);
-      if (msg.event === 'interrupted') this._flushAudio();
+      if (msg.event === 'interrupted') { this._flushAudio(); this.onTurnEnd(); }
       if (msg.event === 'transcript')  this.onTranscript(msg.text);
       if (msg.event === 'ready') {
         // Initial briefing complete — safe to activate mic for Q&A
-        this.onStatus('Briefing complete — mic active, ask questions');
+        try { this.onTurnEnd(); } catch (_) {}
         await this._startMic();
       }
-      if (msg.event === 'error')       this.onStatus(`Error: ${msg.msg}`);
+      if (msg.event === 'plan_requested')    this.onPlanRequested(msg.text);
+      if (msg.event === 'diagram_requested') this.onDiagramRequested();
+      if (msg.event === 'error')             this.onStatus(`Error: ${msg.msg}`);
     };
 
     this.ws.onclose = () => {
@@ -63,7 +68,8 @@ class AudioManager {
   // ── Mic capture ───────────────────────────────────────────────────────────
 
   async _startMic() {
-    this.micStream  = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (this.micStream) return;   // already running — ready fires after every turn, not just the first
+    this.micStream  = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     this.audioCtx16 = new AudioContext({ sampleRate: 16000 });
     const source    = this.audioCtx16.createMediaStreamSource(this.micStream);
     this.micProcessor = this.audioCtx16.createScriptProcessor(4096, 1, 1);
@@ -127,6 +133,12 @@ class AudioManager {
       const startAt = Math.max(this.audioCtx24.currentTime, this.nextStartTime);
       source.start(startAt);
       this.nextStartTime = startAt + audioBuf.duration;
+
+      this.activeSources.push(source);
+      source.onended = () => {
+        const i = this.activeSources.indexOf(source);
+        if (i !== -1) this.activeSources.splice(i, 1);
+      };
     }
   }
 
@@ -134,6 +146,7 @@ class AudioManager {
     this.audioQueue    = [];
     this.bufferedMs    = 0;
     this.nextStartTime = 0; // reset so next session re-arms the jitter buffer
-    this.audioCtx24.suspend().then(() => this.audioCtx24.resume());
+    for (const s of this.activeSources) { try { s.stop(); } catch (_) {} }
+    this.activeSources = [];
   }
 }

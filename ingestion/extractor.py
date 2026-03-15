@@ -4,12 +4,16 @@ import re
 import asyncio
 from google import genai
 from google.genai import types
+from ingestion.reader import reduce_for_large_repo
 
 client = genai.Client()
 MODEL  = 'gemini-3-flash-preview'
 
+CHARS_PER_TOKEN   = 4          # must match reader.py
+BATCH_TOKEN_LIMIT = 700_000    # per-batch ceiling for large-repo path
 
-# ── Prompts ───────────────────────────────────────────────────────────────────
+
+# ── Prompts (standard — used for repos ≤ 700k tokens) ────────────────────────
 
 PASS1_PROMPT = """
 Analyse every file in this repository.
@@ -65,6 +69,21 @@ No prose. No markdown fences.
 """
 
 
+# ── Compact prompt variants (large-repo path — Passes 2-4 only) ───────────────
+# Identical to originals with a preamble telling Gemini it's reading structured
+# summaries rather than raw source.
+
+_COMPACT_PREAMBLE = """
+You are given structured per-file summaries of a codebase extracted during a
+first-pass analysis, not the raw source code. Treat the "functions", "imports",
+and "exports" fields as ground truth for inferring call relationships.
+"""
+
+PASS2_PROMPT_COMPACT = _COMPACT_PREAMBLE + PASS2_PROMPT
+PASS3_PROMPT_COMPACT = _COMPACT_PREAMBLE + PASS3_PROMPT
+PASS4_PROMPT_COMPACT = _COMPACT_PREAMBLE + PASS4_PROMPT
+
+
 # ── Streaming entity patterns per pass ────────────────────────────────────────
 
 _PATTERNS = {
@@ -76,6 +95,55 @@ _PATTERNS = {
         lambda m: m,
     ),
 }
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def estimate_tokens_str(s: str) -> int:
+    return len(s) // CHARS_PER_TOKEN
+
+
+def build_compact_context(per_file: list) -> str:
+    """Serialize per_file[] as compact JSON context for Passes 2-4."""
+    return (
+        '=== CODEBASE KNOWLEDGE (per-file summaries from Pass 1) ===\n'
+        + json.dumps(per_file, indent=2)
+    )
+
+
+def split_into_batches(files: list[dict]) -> list[list[dict]]:
+    """
+    Greedy bin-packing into batches of at most BATCH_TOKEN_LIMIT tokens.
+    Priority files (readme, package.json, etc.) are always placed in batch 0.
+    """
+    priority_names = {
+        'readme.md', 'readme', 'readme.txt',
+        'package.json', 'requirements.txt', 'setup.py',
+        'pyproject.toml', 'go.mod', 'cargo.toml', 'makefile',
+        'docker-compose.yml', 'docker-compose.yaml'
+    }
+
+    priority = [f for f in files if os.path.basename(f['path']).lower() in priority_names]
+    rest     = [f for f in files if os.path.basename(f['path']).lower() not in priority_names]
+
+    batches  = [[]]
+    running  = 0
+
+    # Priority files always go in batch 0
+    for f in priority:
+        tokens   = len(f['content']) // CHARS_PER_TOKEN
+        batches[0].append(f)
+        running += tokens
+
+    for f in rest:
+        tokens = len(f['content']) // CHARS_PER_TOKEN
+        if running + tokens > BATCH_TOKEN_LIMIT:
+            batches.append([])
+            running = 0
+        batches[-1].append(f)
+        running += tokens
+
+    return [b for b in batches if b]  # drop any empty batches
 
 
 # ── Core pass runner ──────────────────────────────────────────────────────────
@@ -120,35 +188,94 @@ async def run_pass(
     return json.loads(accumulated)
 
 
+# ── Batched Pass 1 (large-repo path only) ─────────────────────────────────────
+
+async def run_pass1_batched(
+    files: list[dict],
+    progress_queue: asyncio.Queue = None,
+) -> list:
+    """
+    Run Pass 1 in sequential batches and merge results.
+    Only called when total tokens exceed BATCH_TOKEN_LIMIT.
+    """
+    batches = split_into_batches(files)
+    n       = len(batches)
+    results = []
+
+    async def emit(event, msg):
+        if progress_queue:
+            await progress_queue.put({'event': event, 'msg': msg})
+
+    for i, batch in enumerate(batches, 1):
+        await emit('pass_1', f'Batch {i}/{n} — {len(batch)} files')
+
+        batch_prompt = (
+            f'Note: this is batch {i} of {n} of a larger repository. '
+            f'Other files exist outside this batch.\n'
+            + PASS1_PROMPT
+        )
+        batch_content = pack_files(batch)
+
+        batch_result = await run_pass(
+            batch_prompt,
+            repo_content=batch_content,
+            progress_queue=progress_queue,
+            event_type='pass_1',
+        )
+
+        if isinstance(batch_result, list):
+            results.extend(batch_result)
+
+        if i < n:
+            await emit('pass_1', f'[batch {i}/{n} complete — {len(results)} files so far]')
+
+    return results
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 async def run_all_passes(repo_files: list[dict], progress_queue: asyncio.Queue = None) -> dict:
     """
-    Pack repo, cache it, run all 4 passes.
-    Puts {'event': str, 'msg': str} dicts into progress_queue between passes.
-    Returns complete knowledge graph.
+    Run all 4 passes. For repos ≤ 700k tokens the path is identical to the
+    original implementation. For larger repos the large-repo fallback activates:
+    Pass 1 is batched, Passes 2-4 use the compact per_file[] context.
     """
     repo_content = pack_files(repo_files)
+    is_large     = estimate_tokens_str(repo_content) > BATCH_TOKEN_LIMIT
 
     async def emit(event: str, msg: str):
         if progress_queue:
             await progress_queue.put({'event': event, 'msg': msg})
 
+    # ── Pass 1 ────────────────────────────────────────────────────────────────
     await emit('pass_1', 'Extracting per-file summaries...')
-    per_file = await run_pass(
-        PASS1_PROMPT,
-        repo_content=repo_content,
-        progress_queue=progress_queue,
-        event_type='pass_1',
-    )
 
-    # Create context cache after Pass 1 — reuse for Passes 2-4
-    cache = None
+    if is_large:
+        # Reduce: drop noisy dirs, skeletonise large files — large-repo path only
+        reduced_files, skel_count = reduce_for_large_repo(repo_files)
+        if skel_count:
+            await emit('warning', f'{skel_count} large files skeletonised (signatures only)')
+        per_file    = await run_pass1_batched(reduced_files, progress_queue)
+        p24_content = build_compact_context(per_file)
+    else:
+        # Small repo — current behaviour, untouched
+        per_file    = await run_pass(
+            PASS1_PROMPT,
+            repo_content=repo_content,
+            progress_queue=progress_queue,
+            event_type='pass_1',
+        )
+        p24_content = repo_content
+
+    # ── Context cache ─────────────────────────────────────────────────────────
+    # Small repos: caches raw content (existing behaviour)
+    # Large repos: caches compact context (smaller, more likely to succeed)
+    cache      = None
     cache_name = None
     try:
         cache = await client.aio.caches.create(
             model=MODEL,
-            contents=[types.Content(role='user', parts=[types.Part.from_text(text=repo_content)])],
+            contents=[types.Content(role='user', parts=[types.Part.from_text(text=p24_content)])],
             config=types.CreateCachedContentConfig(ttl='600s')
         )
         cache_name = cache.name
@@ -156,10 +283,13 @@ async def run_all_passes(repo_files: list[dict], progress_queue: asyncio.Queue =
         print(f"Context cache unavailable, continuing without: {e}")
 
     try:
+        # ── Passes 2-4 ────────────────────────────────────────────────────────
+        # Small repos: p24_content == repo_content  → identical to current code
+        # Large repos: p24_content == compact JSON  → large-repo fallback
         await emit('pass_2', 'Mapping file connections...')
         connections = await run_pass(
-            PASS2_PROMPT,
-            repo_content='' if cache_name else repo_content,
+            PASS2_PROMPT if not is_large else PASS2_PROMPT_COMPACT,
+            repo_content='' if cache_name else p24_content,
             cache_name=cache_name,
             progress_queue=progress_queue,
             event_type='pass_2',
@@ -167,8 +297,8 @@ async def run_all_passes(repo_files: list[dict], progress_queue: asyncio.Queue =
 
         await emit('pass_3', 'Identifying features...')
         features = await run_pass(
-            PASS3_PROMPT,
-            repo_content='' if cache_name else repo_content,
+            PASS3_PROMPT if not is_large else PASS3_PROMPT_COMPACT,
+            repo_content='' if cache_name else p24_content,
             cache_name=cache_name,
             progress_queue=progress_queue,
             event_type='pass_3',
@@ -176,20 +306,21 @@ async def run_all_passes(repo_files: list[dict], progress_queue: asyncio.Queue =
 
         await emit('pass_4', 'Synthesising architecture...')
         architecture = await run_pass(
-            PASS4_PROMPT,
-            repo_content='' if cache_name else repo_content,
+            PASS4_PROMPT if not is_large else PASS4_PROMPT_COMPACT,
+            repo_content='' if cache_name else p24_content,
             cache_name=cache_name,
             progress_queue=progress_queue,
             event_type='pass_4',
         )
         if isinstance(architecture, list):
             architecture = architecture[0]
+
     finally:
         if cache:
             try:
                 await client.aio.caches.delete(name=cache.name)
             except Exception:
-                pass  # best-effort cleanup
+                pass
 
     return {
         'per_file':     per_file,

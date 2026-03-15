@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ingestion.cloner import clone_repo, cleanup
-from ingestion.reader import read_repo, truncate_to_limit, estimate_tokens
+from ingestion.reader import read_repo, truncate_to_limit
 from ingestion.extractor import run_all_passes
 from knowledge.graph import save
 
@@ -33,14 +33,14 @@ async def ingest(req: IngestRequest):
             repo_path = clone_repo(req.github_url)
 
             yield f"data: {json.dumps({'event': 'reading', 'msg': 'Reading files...'})}\n\n"
-            files = read_repo(repo_path)
+            files, read_stats = read_repo(repo_path)
             files, was_truncated = truncate_to_limit(files)
-            token_estimate = estimate_tokens(files)
 
-            yield f"data: {json.dumps({'event': 'reading', 'msg': f'Found {len(files)} files (~{token_estimate:,} tokens)'})}\n\n"
+            reading_msg = f"Found {read_stats['total']} files (~{read_stats['tokens']:,} tokens)"
+            yield f"data: {json.dumps({'event': 'reading', 'msg': reading_msg})}\n\n"
 
             if was_truncated:
-                yield f"data: {json.dumps({'event': 'warning', 'msg': 'Large repo: some deep files excluded to fit context window'})}\n\n"
+                yield f"data: {json.dumps({'event': 'warning', 'msg': 'Repo still very large after skeletonisation — some deep files excluded'})}\n\n"
 
             # Launch extraction concurrently so we can stream its progress via the queue
             extraction_task = asyncio.create_task(
@@ -80,6 +80,6 @@ async def ingest(req: IngestRequest):
         media_type='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no'  # prevents nginx / Cloud Run proxy from buffering SSE
+            'X-Accel-Buffering': 'no'
         }
     )
