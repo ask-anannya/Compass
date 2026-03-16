@@ -9,3 +9,4 @@ python-dotenv==1.0.0
 aiofiles==24.1.0
 gitpython
 reportlab
+Pillow

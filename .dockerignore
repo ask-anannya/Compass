@@ -1,0 +1,15 @@
+.env
+.git
+.gitignore
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.md
+!README.md
+Dockerfile
+.dockerignore
+audio_transcript_plan.md
+codegen_instructions.md
+large_repo_plan.md
+phase3_ambient_plan.md

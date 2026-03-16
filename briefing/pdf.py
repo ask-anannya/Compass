@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import os
 import re
 import urllib.request
 from reportlab.lib.pagesizes import A4
@@ -15,7 +16,7 @@ from reportlab.platypus import (
 from PIL import Image as PILImage
 from knowledge.graph import load
 
-LOGO_PATH = r'D:\Gemini live\ios-compass-7.png'
+LOGO_PATH = os.path.join(os.path.dirname(__file__), '..', 'assets', 'compass-logo.png')
 
 
 def _logo_reader() -> ImageReader:
