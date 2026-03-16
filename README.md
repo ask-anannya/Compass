@@ -232,6 +232,45 @@ The chat system uses `gemini-3-flash-preview` for general questions. Messages th
 
 ---
 
+## Storage
+
+Compass uses a two-tier storage model — server-side in-memory for live data, browser `localStorage` for persistence across restarts.
+
+### Server-side (in-memory, lost on restart)
+
+| Store | Location | What it holds |
+|---|---|---|
+| Knowledge graphs | `knowledge/graph.py` — `_store: dict` | Full analysis result per session: `per_file`, `connections`, `features`, `architecture` |
+| Conversation history | `knowledge/conversations.py` — `_history: dict` | Multi-turn chat messages per session, capped at 40 entries |
+| ADK sessions | `InMemorySessionService` (ADK built-in) | Live Assistant and Ambient Session agent state |
+
+All three are plain Python dicts keyed by `session_id`. There is no database. Data is lost when the server restarts — including on Cloud Run when a new revision is deployed or the container cold-starts after inactivity.
+
+> **Production upgrade path:** replace `_store` and `_history` with Redis (with a 2-hour TTL). ADK's `InMemorySessionService` can be swapped for `VertexAiSessionService` for persistent agent state.
+
+### Client-side (localStorage, survives restarts)
+
+| Key | What it holds |
+|---|---|
+| `compass_sessions` | Array of up to 20 session objects |
+
+Each session object stored in the browser contains:
+
+```json
+{
+  "sessionId": "abc123",
+  "repoName": "flask",
+  "repoUrl": "https://github.com/...",
+  "createdAt": "2026-03-16T...",
+  "textBrief": "... full markdown string ...",
+  "chatHistory": [{ "role": "user", "text": "..." }, ...]
+}
+```
+
+This means users can reopen past briefs and read prior chat history even after a server restart — they just can't send new chat messages until the server has re-ingested that repo.
+
+---
+
 ## Environment variables
 
 | Variable | Description |
