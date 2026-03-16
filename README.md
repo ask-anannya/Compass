@@ -181,6 +181,42 @@ The four passes are merged into a single knowledge graph JSON saved per session,
 
 ---
 
+## Large repo fallback
+
+Compass handles repositories of any size through a two-stage fallback that activates automatically when a repo exceeds **700 000 tokens** (~2.8 MB of source).
+
+### Thresholds
+
+| Limit | Value | Where enforced |
+|---|---|---|
+| Max file size | 100 KB | `reader.py` — files larger than this are skipped entirely |
+| Standard path ceiling | 700 000 tokens | `extractor.py:BATCH_TOKEN_LIMIT` — below this, standard 4-pass runs |
+| Hard safety cap | 900 000 tokens | `reader.py:TOKEN_LIMIT` — last-resort truncation |
+| Skeletonisation threshold | 20 000 chars (~5 000 tokens) | `reader.py:SKELETON_THRESHOLD` — large files reduced to signatures only |
+
+### What happens on the large-repo path
+
+**Step 1 — Read (unchanged):** `read_repo()` always skips binary files, `node_modules`, `__pycache__`, `.git`, build outputs, lockfiles, and minified assets regardless of repo size.
+
+**Step 2 — Reduce:** `reduce_for_large_repo()` applies two additional filters before Pass 1 runs:
+
+- **Directory pruning** — drops entire subtrees: `tests/`, `docs/`, `examples/`, `migrations/`, `vendor/`, `generated/`, `scripts/`, `assets/`, `static/`, `public/`, and similar noisy directories that add volume without architectural signal
+- **Skeletonisation** — files over 20 000 chars are stripped down to signatures, imports, and docstrings only (language-aware for Python, JS/TS, Go, Java/Kotlin/Scala, Ruby; first 60 lines for everything else). The full file body is dropped; only the structural skeleton is sent to Gemini
+
+**Step 3 — Batched Pass 1:** The reduced file list is greedy bin-packed into sequential batches of ≤700 000 tokens each. Priority files (`README.md`, `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, `Makefile`, etc.) are always placed in batch 0. Each batch runs Pass 1 independently; results are merged into a single `per_file[]` array.
+
+**Step 4 — Compact context for Passes 2-4:** Instead of sending the raw source again, Passes 2-4 receive the `per_file[]` JSON produced by Pass 1 as their context. This is far smaller than the original source and fits comfortably in a single Gemini call. The prompts for these passes include a preamble telling Gemini it is reading structured summaries rather than raw code.
+
+**Step 5 — Context cache:** Whether the repo is standard or large, Compass attempts to create a Gemini context cache (TTL 600 s) for the Passes 2-4 input so all three share the same cached tokens. If caching is unavailable the content is re-sent inline.
+
+**Step 6 — Last-resort truncation:** `truncate_to_limit()` is a final safety net at 900 000 tokens. It sorts files by directory depth (shallower = higher priority) and drops files until the total fits, regardless of which large-repo steps ran above it.
+
+### What you lose on a large repo
+
+Skeletonised files lose their function bodies — Gemini sees signatures and docstrings only, so the call graph and key-logic fields for those files will be less detailed. Dropped directories (tests, docs, examples) are not analysed at all. The knowledge graph is still complete and accurate for the core application code.
+
+---
+
 ## Live Assistant
 
 The Live Assistant uses Google ADK (`google-adk`) with `StreamingMode.BIDI` for full-duplex conversation:
