@@ -263,6 +263,7 @@ Clicking **📊 Diagram** (or asking the Live Assistant) sends the knowledge gra
 ---
 
 ## PDF Export
+Refer to Compass_Report_Flask.pdf to see the generated report
 
 The PDF is generated with ReportLab and contains:
 
