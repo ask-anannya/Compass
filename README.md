@@ -1,6 +1,18 @@
-# Compass
+<p align="center">
+  <h1 align="center">🧭 Compass</h1>
+  <p align="center">
+    <strong>Codebase Intelligence Platform</strong><br/>
+    Paste a GitHub URL — get an instant AI brief, voice assistant, architecture diagram, and PDF report powered by Gemini &amp; Google ADK
+  </p>
+</p>
 
-Paste a GitHub URL. Get an instant AI-generated brief of the codebase — text, audio, diagram, and PDF — plus a live chat interface and an ambient voice assistant that watches you code.
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.12+-blue?logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/FastAPI-0.135+-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Gemini-google--genai-4285F4?logo=google&logoColor=white" alt="Gemini" />
+  <img src="https://img.shields.io/badge/Google%20ADK-1.27-34A853?logo=google&logoColor=white" alt="Google ADK" />
+  <img src="https://img.shields.io/badge/deploy-Cloud%20Run-4285F4?logo=googlecloud&logoColor=white" alt="Cloud Run" />
+</p>
 
 ---
 
