@@ -10,9 +10,10 @@ Paste a GitHub URL. Get an instant AI-generated brief of the codebase — text, 
 2. **Analyses** it with a 4-pass Gemini pipeline that builds a knowledge graph (file purposes, call graph, features, architecture)
 3. **Generates** a structured text brief you can read in 90 seconds
 4. **Live Assistant** — bidirectional voice session using Google ADK + Gemini Live: delivers an audio briefing, answers questions, and can trigger implementation plans and architecture diagrams on voice command
-5. **Architecture Diagram** — generates a visual architecture diagram of the codebase using `gemini-3-pro-image-preview`; expandable fullscreen on click
-6. **Exports** a PDF brief via ReportLab
-7. **Chats** — persistent multi-turn chat grounded in the knowledge graph; implementation plan requests are automatically routed to the more capable `gemini-3.1-pro-preview` model
+5. **Ambient Session** — screen-share + mic mode where the AI watches your screen in real time, proactively comments when it sees something actionable, and flags deviations from your active implementation plan
+6. **Architecture Diagram** — generates a visual architecture diagram of the codebase using `gemini-3-pro-image-preview`; expandable fullscreen on click
+7. **Exports** a PDF brief (cover page, Mermaid architecture diagram, feature map, file breakdown) via ReportLab
+8. **Chats** — persistent multi-turn chat grounded in the knowledge graph; implementation plan requests are automatically routed to the more capable `gemini-3.1-pro-preview` model
 
 Sessions are saved in localStorage and resumable from the sidebar.
 
@@ -50,11 +51,13 @@ compass/
 │
 ├── briefing/
 │   ├── text.py              # Generates markdown text brief from knowledge graph
-│   ├── audio.py             # ADK bidirectional audio session handler
+│   ├── audio.py             # ADK bidirectional audio session handler (Live Assistant)
 │   ├── agent.py             # ADK Agent + Runner + tool definitions (plan, diagram)
+│   ├── session_agent.py     # Separate ADK Agent for ambient screen-watch mode
+│   ├── session.py           # Ambient session handler (screen frames + mic + proactivity)
 │   ├── chat.py              # Streams chat responses; routes plan requests to Pro model
 │   ├── diagram.py           # Generates architecture diagram image via Gemini
-│   └── pdf.py               # ReportLab PDF brief generator
+│   └── pdf.py               # ReportLab PDF: cover page, Mermaid diagram, tables
 │
 ├── routes/
 │   ├── ingest.py            # POST /ingest — SSE streaming ingestion progress
@@ -62,13 +65,15 @@ compass/
 │   ├── pdf.py               # GET  /brief/pdf/{session_id}
 │   ├── chat.py              # POST /chat/{session_id} — SSE streaming chat
 │   ├── diagram.py           # GET  /brief/diagram/{session_id} — image generation
-│   └── websocket.py         # WS   /brief/audio/{session_id} — live assistant
+│   ├── websocket.py         # WS   /brief/audio/{session_id} — live assistant
+│   └── session.py           # WS   /session/audio/{session_id} — ambient session
 │
 └── frontend/
     ├── index.html           # Single-page app (sidebar, chat, input bar)
     └── js/
         ├── main.js          # App logic, session store, ingestion, chat, buttons
-        └── audio-manager.js # Web Audio playback + mic capture (ADK audio)
+        ├── audio-manager.js # Web Audio playback + mic capture (Live Assistant)
+        └── session-manager.js # Screen capture + mic + audio playback (Ambient Session)
 ```
 
 ---
@@ -190,9 +195,34 @@ The frontend captures mic audio at 16 kHz via `ScriptProcessorNode` with echo ca
 
 ---
 
+## Ambient Session
+
+The Ambient Session (Phase 3) is a proactive AI that watches your screen and listens while you code:
+
+- Captures the screen at 1 fps (1280×720 JPEG) via `getDisplayMedia` and streams frames to the backend alongside mic audio
+- Uses `ProactivityConfig(proactive_audio=True)` — the model speaks without being prompted, only when it has something specific and actionable to say
+- Injected with the full knowledge graph and the most recent implementation plan from chat history at session start; flags any deviation from the plan in real time
+- Same tool set as the Live Assistant (`request_implementation_plan`, `request_architecture_diagram`)
+- A silent looping `AudioContext` keeps the browser's audio pipeline alive in background tabs (prevents Chrome throttling)
+- Runs as a separate ADK agent (`compass_session`) with its own `InMemorySessionService` to avoid session ID collisions with the Live Assistant
+
+---
+
 ## Architecture Diagram
 
 Clicking **📊 Diagram** (or asking the Live Assistant) sends the knowledge graph to `gemini-3-pro-image-preview` with a structured prompt describing the system's architecture, features, and key files. The returned JPEG is displayed in the chat window and is expandable to fullscreen on click.
+
+---
+
+## PDF Export
+
+The PDF is generated with ReportLab and contains:
+
+1. **Cover page** — full-page black background, white Compass logo, wordmark, subtitle
+2. **Architecture Overview** — conventions and rules from the knowledge graph
+3. **Architecture Diagram** — Mermaid `flowchart TD` built from the knowledge graph and rendered to PNG via [mermaid.ink](https://mermaid.ink)
+4. **Feature Map** — table of all features with entry points, files, and descriptions
+5. **File Breakdown** — every file with purpose, callers, callees, and key functions
 
 ---
 

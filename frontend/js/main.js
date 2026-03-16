@@ -4,6 +4,7 @@ const analyseBtn = document.getElementById('analyseBtn');
 const progressWrap = document.getElementById('progressWrap');
 const progressLog = document.getElementById('progressLog');
 const outputPanel = document.getElementById('outputPanel');
+const sessionBtn  = document.getElementById('sessionBtn');
 const audioBtn    = document.getElementById('audioBtn');
 const diagramBtn  = document.getElementById('diagramBtn');
 const pdfBtn      = document.getElementById('pdfBtn');
@@ -22,10 +23,12 @@ const navProgressBar = document.getElementById('navProgressBar');
 
 // ── App state ─────────────────────────────────────────────────────────────────
 let currentSessionId = null;
-let audioManager = null;
-let audioActive = false;
-let _audioBubble = null;   // current AI bubble receiving transcript
-let _audioTranscript = '';     // accumulated text for the current turn
+let audioManager   = null;
+let audioActive    = false;
+let sessionManager = null;
+let sessionActive  = false;
+let _audioBubble     = null;
+let _audioTranscript = '';
 let appMode = 'url'; // 'url' | 'chat'
 
 // ── Session store (localStorage) ─────────────────────────────────────────────
@@ -102,6 +105,7 @@ function loadSession(sessionId) {
   if (!session) return;
 
   stopAudio();
+  stopSession();
   currentSessionId = sessionId;
 
   // Reset all panels
@@ -114,9 +118,11 @@ function loadSession(sessionId) {
   heroSection.style.display = 'none';
 
   outputPanel.style.display = 'flex';
+  sessionBtn.style.display = '';
   audioBtn.style.display = '';
   diagramBtn.style.display = '';
   pdfBtn.style.display = '';
+  sessionBtn.disabled = false;
   audioBtn.disabled = false;
   diagramBtn.disabled = false;
   pdfBtn.disabled = false;
@@ -137,6 +143,7 @@ function loadSession(sessionId) {
 // ── Reset to URL mode ─────────────────────────────────────────────────────────
 function resetToUrlMode() {
   stopAudio();
+  stopSession();
   appMode = 'url';
   currentSessionId = null;
 
@@ -149,9 +156,11 @@ function resetToUrlMode() {
   chatMessages.innerHTML = '';
   chatArea.style.display = 'none';
 
+  sessionBtn.style.display = 'none';
   audioBtn.style.display = 'none';
   diagramBtn.style.display = 'none';
   pdfBtn.style.display = 'none';
+  sessionBtn.disabled = true;
   audioBtn.disabled = true;
   diagramBtn.disabled = true;
   pdfBtn.disabled = true;
@@ -288,9 +297,11 @@ function appendProgress(event, msg) {
 async function onIngestionComplete(sessionId, repoUrl) {
   currentSessionId = sessionId;
   outputPanel.style.display = 'flex';
+  sessionBtn.style.display = '';
   audioBtn.style.display = '';
   diagramBtn.style.display = '';
   pdfBtn.style.display = '';
+  sessionBtn.disabled = false;
   audioBtn.disabled = false;
   diagramBtn.disabled = false;
   pdfBtn.disabled = false;
@@ -496,6 +507,7 @@ function appendSystemMsg(text) {
 
 function startAudio() {
   if (!currentSessionId) return;
+  if (sessionActive) stopSession();  // mic conflict guard
   audioActive = true;
   audioBtn.textContent = '⏹ Stop Live Assistant';
   audioBtn.classList.add('active');
@@ -525,6 +537,52 @@ function stopAudio() {
   audioBtn.classList.remove('active');
   _finaliseAudioBubble();
   if (audioManager) { audioManager.stop(); audioManager = null; }
+}
+
+// ── Ambient session ───────────────────────────────────────────────────────────
+sessionBtn.addEventListener('click', () => {
+  if (sessionActive) stopSession();
+  else               startSession();
+});
+
+async function startSession() {
+  if (!currentSessionId) return;
+  if (audioActive) stopAudio();   // mic conflict guard
+
+  sessionActive = true;
+  sessionBtn.textContent = '⏹ Stop Session';
+  sessionBtn.classList.add('active');
+  appendSystemMsg('🖥 Starting ambient session...');
+
+  sessionManager = new SessionManager(
+    currentSessionId,
+    text => {
+      if (!_audioBubble) _newAudioBubble();
+      _audioTranscript += text + ' ';
+      _audioBubble.querySelector('.msg-text').innerHTML = markdownToHtml(_audioTranscript);
+      content.scrollTop = content.scrollHeight;
+    },
+    status => appendSystemMsg(status),
+    () => _finaliseAudioBubble(),
+    text => sendMessage(text),
+    ()   => generateDiagram(),
+  );
+
+  try {
+    await sessionManager.start();
+  } catch (err) {
+    appendSystemMsg(`Session error: ${err.message}`);
+    stopSession();
+  }
+}
+
+function stopSession() {
+  if (!sessionActive) return;
+  sessionActive = false;
+  sessionBtn.textContent = '🖥 Start Session';
+  sessionBtn.classList.remove('active');
+  _finaliseAudioBubble();
+  if (sessionManager) { sessionManager.stop(); sessionManager = null; }
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────

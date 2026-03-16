@@ -10,9 +10,10 @@ graph TD
     FastAPI["FastAPI (main.py)"]
     Ingestion["ingestion/\nclone → read → analyse"]
     Knowledge["knowledge/\nin-memory graph store"]
-    Briefing["briefing/\ntext · audio · diagram · pdf · chat"]
+    Briefing["briefing/\ntext · audio · session · diagram · pdf · chat"]
     Gemini["Gemini API"]
     ADK["Google ADK\n(Gemini Live)"]
+    MermaidInk["mermaid.ink\n(diagram render)"]
 
     Browser -->|"POST /ingest (SSE)"| FastAPI
     Browser -->|"GET /brief/text"| FastAPI
@@ -20,6 +21,7 @@ graph TD
     Browser -->|"GET /brief/diagram"| FastAPI
     Browser -->|"POST /chat (SSE)"| FastAPI
     Browser -->|"WS /brief/audio (bidi)"| FastAPI
+    Browser -->|"WS /session/audio (bidi)"| FastAPI
 
     FastAPI --> Ingestion
     FastAPI --> Briefing
@@ -29,6 +31,7 @@ graph TD
     Ingestion -->|"generate_content_stream"| Gemini
     Briefing -->|"generate_content\ngenerate_content_stream"| Gemini
     Briefing -->|"StreamingMode.BIDI"| ADK
+    Briefing -->|"GET /img/{encoded}"| MermaidInk
 ```
 
 ---
@@ -226,15 +229,66 @@ Loads the knowledge graph and builds a structured prompt from it (architecture p
 
 The frontend embeds it as a `data:` URL in an AI chat bubble. Clicking the image opens a fullscreen lightbox overlay; `Escape` or clicking outside closes it.
 
-### 8. PDF (`GET /brief/pdf/{session_id}`)
+### 8. Ambient Session (`WebSocket /session/audio/{session_id}`)
 
-Generates the text brief, then renders it to a PDF in memory using ReportLab. Returned as `application/pdf` with `Content-Disposition: attachment`.
+A proactive AI observer that watches the user's screen and listens to mic audio while they code. Runs as a separate ADK agent (`compass_session` / `briefing/session_agent.py`) with its own `InMemorySessionService` to avoid session ID collisions with the Live Assistant.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant WS as session route
+    participant ADK as Google ADK
+    participant G as Gemini Live
+
+    B->>WS: WS connect /session/audio/{session_id}
+    WS->>ADK: create_session(compass_session_<id>)
+    WS->>ADK: queue.send_content(knowledge_graph + active_plan)
+    Note over WS: asyncio.create_task × 4
+
+    par upstream_task
+        loop mic + screen
+            B->>WS: {type:audio, data:base64_pcm_16k}
+            WS->>ADK: queue.send_realtime(Blob pcm/16000)
+            B->>WS: {type:frame, data:base64_jpeg}
+            WS->>ADK: queue.send_realtime(Blob image/jpeg)
+        end
+        B->>WS: {type:stop}
+    and downstream_task
+        ADK->>G: runner.run_live(BIDI, proactive_audio=True)
+        G-->>WS: audio + transcription events
+        WS-->>B: {event:audio} / {event:transcript}
+    and plan_task
+        WS-->>B: {event:plan_requested, text}
+    and diagram_task
+        WS-->>B: {event:diagram_requested}
+    end
+```
+
+**Key details:**
+- `extract_latest_plan()` walks the chat history in reverse to find the most recent model response preceded by a plan-keyword message; injected into the initial context prompt
+- `ProactivityConfig(proactive_audio=True)` — Gemini speaks without waiting for a user turn
+- Screen is captured at 1 fps, 1280×720, JPEG quality 0.7, via `getDisplayMedia` + canvas `setInterval`
+- A silent looping `AudioContext` acts as a keep-alive to prevent Chrome from throttling the tab
+
+### 9. PDF (`GET /brief/pdf/{session_id}`)
+
+Generates a multi-page PDF in memory using ReportLab. Returned as `application/pdf` with `Content-Disposition: attachment`.
+
+| Page | Content |
+|---|---|
+| 1 | Black cover — Compass logo (PIL-inverted PNG), "COMPASS" wordmark, subtitle |
+| 2 | Architecture Overview — `before_you_touch_anything`, conventions, rules |
+| 3 | Architecture Diagram — Mermaid `flowchart TD` built from the knowledge graph, rendered to PNG via `mermaid.ink` GET API |
+| 4 | Feature Map — table of all features with entry points, files, descriptions |
+| 5+ | File Breakdown — every file with purpose, callers, callees, key functions |
+
+The Mermaid diagram is constructed deterministically from the graph: entry points as a top cluster, one subgraph per feature listing up to 3 files, edges derived from `arch.entry_points` → features and cross-feature calls from the `connections` array. File node IDs are prefixed with their feature ID to prevent Mermaid parse errors from duplicate IDs.
 
 ---
 
 ## Frontend architecture (`frontend/`)
 
-Single HTML file with two JS modules. No build step, no framework.
+Single HTML file with three JS modules. No build step, no framework.
 
 ### State model
 
@@ -263,7 +317,7 @@ localStorage['compass_sessions']: Session[]
 
 Sessions are the single source of truth for the sidebar. The server holds nothing the browser needs to restore a session — it only needs a live server for new chat messages.
 
-### Audio pipeline (JS — `audio-manager.js`)
+### Live Assistant pipeline (JS — `audio-manager.js`)
 
 ```mermaid
 flowchart LR
@@ -288,6 +342,30 @@ flowchart LR
     end
 ```
 
+### Ambient Session pipeline (JS — `session-manager.js`)
+
+`SessionManager` mirrors `AudioManager`'s audio engine but adds screen capture and a keep-alive oscillator:
+
+```mermaid
+flowchart TD
+    subgraph Capture
+        DISP["getDisplayMedia()\nvideo track"] --> CANVAS["canvas 1280×720\nsetInterval 1000ms"]
+        CANVAS --> JPEG["toDataURL JPEG 0.7\n→ base64"] -->|"{type:frame}"| WS
+        MIC2["getUserMedia\n16 kHz echoCancellation"] --> SPN2["ScriptProcessorNode"] --> PCM2["float→int16 → base64"] -->|"{type:audio}"| WS
+    end
+
+    subgraph KeepAlive
+        OSC["OscillatorNode\ngain=0 → silent loop"] --> AC2["AudioContext\n(prevents tab throttle)"]
+    end
+
+    subgraph Playback
+        WS -->|"{event:audio}"| Q2["jitter buffer 180ms"]
+        Q2 --> SCHED2["source.start(nextStartTime)"]
+        SCHED2 --> TRACK2["activeSources[]\nstop() on interrupt"]
+        TRACK2 --> AC2
+    end
+```
+
 ---
 
 ## Data flow at a glance
@@ -301,10 +379,11 @@ flowchart TD
     Graph["knowledge graph\n{per_file, connections,\nfeatures, architecture}"]
 
     TextBrief["GET /brief/text\ngemini-3-flash-preview\n→ markdown string"]
-    PDF["GET /brief/pdf\nReportLab → PDF bytes"]
+    PDF["GET /brief/pdf\nReportLab + mermaid.ink\n→ PDF bytes"]
     Chat["POST /chat\nflash (general) or pro (plans)\nSSE text chunks"]
     Audio["WS /brief/audio\nADK + Gemini Live\nbidi PCM audio + tools"]
     Diagram["GET /brief/diagram\ngemini-3-pro-image-preview\n→ JPEG image"]
+    Session["WS /session/audio\nADK + Gemini Live\nscreen frames + mic + proactivity"]
 
     URL --> Clone --> Read --> Passes --> Graph
     Graph --> TextBrief
@@ -312,6 +391,7 @@ flowchart TD
     Graph --> Chat
     Graph --> Audio
     Graph --> Diagram
+    Graph --> Session
 ```
 
 ---
